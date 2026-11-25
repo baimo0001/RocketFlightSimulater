@@ -6,7 +6,7 @@
 
 ## 快速开始
 
-1. 从 [GitHub Releases](https://github.com/baimo0001/NebulaRocket/releases/latest) 下载并解压 Windows 便携包，运行 `NebulaRocket.exe`。请将它和 `_internal` 文件夹保留在一起。
+1. 从 [GitHub Releases](https://github.com/baimo0001/RocketFlightSimulater/releases/latest) 下载并解压 Windows 便携包，运行 `NebulaRocket.exe`。请将它和 `_internal` 文件夹保留在一起。
 2. 应用会打开演示项目。点击右上角的 **运行仿真**，或按 `F5`。
 3. 在 **飞行仿真 → 结果与曲线** 查看高度、速度、发动机曲线、静稳定和事件时间。
 4. 点击 **保存** 生成可继续编辑的 JSON 项目。点击 **导出报告** 生成 HTML、PNG、CSV 和 JSON 文件。
