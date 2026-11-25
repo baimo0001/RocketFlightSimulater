@@ -1,0 +1,14 @@
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.build-wheels/
+build/
+dist/
+release/
+validation/
+NebulaRocket.spec
+*.log
+*.tmp
+.idea/
+.vscode/
