@@ -1059,6 +1059,8 @@ class App:
 
         self.root.update_idletasks()
         self.repaint_window()
+        # Let Tk handle the Expose events from the redraw before grabbing.
+        self.root.update()
         if sys.platform == 'win32':
             import ctypes
             ctypes.windll.dwmapi.DwmFlush()
