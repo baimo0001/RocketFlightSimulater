@@ -1,3 +1,4 @@
+import sys
 import tkinter as tk
 import unittest
 from unittest.mock import patch
@@ -57,6 +58,40 @@ class GuiTests(unittest.TestCase):
             self.app.new_project()
         question.assert_called_once()
         self.assertEqual(self.app.variables['name'].get(), '未保存参数')
+
+    def test_new_project_visibly_resets_the_workspace(self):
+        from pathlib import Path
+        self.app.filepath = Path('旧项目.json')
+        self.app.apply_result(run_project(self.app.get_project()))
+        self.app.new_project()
+        self.assertIsNone(self.app.filepath)
+        self.assertIsNone(self.app.result)
+        self.assertEqual(self.app.variables['name'].get(), '未命名火箭项目')
+        self.assertIn('未保存的新项目', self.root.title())
+        self.assertIn('已新建项目', self.app.status.get())
+        self.assertFalse(self.app.dirty)
+
+    def test_new_project_while_busy_explains_why(self):
+        self.app.busy = True
+        self.app.new_project()
+        self.assertIn('仿真计算中', self.app.status.get())
+        self.app.busy = False
+
+    def test_plots_are_built_lazily_per_tab(self):
+        self.app.apply_result(run_project(self.app.get_project()))
+        self.assertEqual(self.app.plots_built, {'flight'})
+        self.app.plot_tabs.select(self.app.plot_frames['motor'])
+        self.root.update()
+        self.assertEqual(self.app.plots_built, {'flight', 'motor'})
+
+    @unittest.skipUnless(sys.platform == 'win32', 'Windows only')
+    def test_repaint_does_not_enable_composited_window_style(self):
+        import ctypes
+        self.root.deiconify(); self.root.update()
+        self.app.repaint_window()
+        user32 = ctypes.windll.user32
+        window = user32.GetParent(self.root.winfo_id()) or self.root.winfo_id()
+        self.assertFalse(user32.GetWindowLongW(window, -20) & 0x02000000)
 
     def test_component_shortcut_selects_and_opens_the_matching_inspector(self):
         self.app.open_component('fins')

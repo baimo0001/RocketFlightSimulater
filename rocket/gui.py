@@ -129,7 +129,8 @@ class App:
                                             ('打开', self.open_project, 'open', 'o'),
                                             ('保存', self.save, 'save', 's')]:
             self.tool_button(toolbar, label, command, glyph).pack(side='left', padx=(0, 5))
-            self.root.bind(f'<Control-{key}>', lambda event, action=command: action())
+            for variant in (key, key.upper()):
+                self.root.bind(f'<Control-{variant}>', lambda event, action=command: action())
         ttk.Separator(toolbar, orient='vertical').pack(side='left', fill='y', padx=(6, 10), pady=5)
         self.tool_button(toolbar, '模型说明', self._show_help).pack(side='left')
         self.run_button = self.tool_button(toolbar, '运行仿真', self.run, 'run', 'Primary.TButton')
@@ -238,12 +239,18 @@ class App:
     def fit_plots(self):
         # Windows DPI scaling can update the backing store after the first layout.
         # Fit once the panes are mapped, using actual widget pixels.
+        # Only redraw visible plots whose pixel size actually changed.
         for canvas in self.canvases:
             widget=canvas.get_tk_widget()
-            if widget.winfo_ismapped() and widget.winfo_width()>50 and widget.winfo_height()>50:
-                event=tk.Event();event.width=widget.winfo_width();event.height=widget.winfo_height()
-                canvas.resize(event)
-                canvas.draw()
+            if not widget.winfo_ismapped():
+                continue
+            size=(widget.winfo_width(), widget.winfo_height())
+            if size[0]<=50 or size[1]<=50 or getattr(canvas, 'fitted_size', None)==size:
+                continue
+            canvas.fitted_size=size
+            event=tk.Event();event.width,event.height=size
+            canvas.resize(event)
+            canvas.draw_idle()
         self.repaint_window()
 
     def repaint_window(self):
@@ -263,13 +270,10 @@ class App:
         invalidate_children_now = 0x0001 | 0x0004 | 0x0080 | 0x0100
         handle = self.root.winfo_id()
         window = outer_window(handle) or handle
-        if not getattr(self, 'native_composited', False):
-            get_style = user32.GetWindowLongW
-            get_style.argtypes = [wintypes.HWND, ctypes.c_int]
-            set_style = user32.SetWindowLongW
-            set_style.argtypes = [wintypes.HWND, ctypes.c_int, ctypes.c_long]
-            set_style(window, -20, get_style(window, -20) | 0x02000000)
-            self.native_composited = True
+        # A one-shot redraw is enough to clear stale pixels. Do not set
+        # WS_EX_COMPOSITED: with Tk child windows it causes an endless
+        # WM_PAINT storm that keeps the event loop 100% busy (lag, dropped
+        # frames, slow clicks).
         redraw(window, None, None, invalidate_children_now)
 
     def _workspace_changed(self, event=None):
@@ -378,7 +382,12 @@ class App:
             return 'break'
         # Scope the binding to each page's descendants; do not hijack plot scrolling.
         host.bind('<Enter>', lambda e: canvas.bind_all('<MouseWheel>', wheel))
-        host.bind('<Leave>', lambda e: canvas.unbind_all('<MouseWheel>'))
+        def leave(e):
+            # Moving onto a child field also sends <Leave>; keep scrolling then.
+            under = host.winfo_containing(e.x_root, e.y_root)
+            if under is None or not str(under).startswith(str(host)):
+                canvas.unbind_all('<MouseWheel>')
+        host.bind('<Leave>', leave)
         return inner
 
     def _group(self, parent, title):
@@ -558,6 +567,8 @@ class App:
         for key, label in [('event','事件'), ('time','时间 / s'), ('height','高度 / m'), ('speed','速度 / m/s')]:
             self.event_tree.heading(key, text=label); self.event_tree.column(key, width=110, anchor='center')
         self.event_tree.pack(fill='both', expand=True, padx=12, pady=12)
+        self.plots_built = set()
+        self.plot_tabs.bind('<<NotebookTabChanged>>', self._build_visible_plot)
 
     def _text_changed(self, widget):
         if widget.edit_modified():
@@ -611,8 +622,13 @@ class App:
         self.invalidate()
         self.dirty = False
         self.status.set('项目已载入')
+        self._update_title()
         self._sync_component_tree()
         self.draw_schematic()
+
+    def _update_title(self):
+        name = self.filepath.name if self.filepath else '未保存的新项目'
+        self.root.title(f'{name} - 模型火箭设计与仿真')
 
     def _sync_component_tree(self):
         self.component_tree.item('rocket', text=' ' + self.project['name'])
@@ -637,6 +653,7 @@ class App:
         for canvas in self.canvases:
             canvas.figure.clear()
         self.canvases=[]
+        self.plots_built=set()
         for kind in ['flight','motor','stability']:
             for child in self.plot_frames[kind].winfo_children():
                 child.destroy()
@@ -795,12 +812,20 @@ class App:
 
     def new_project(self):
         if self.busy:
+            self.status.set('仿真计算中，请先取消或等待完成后再新建项目。')
             return
         if not self._confirm_discard():
             return
+        p = default_project()
+        p['name'] = '未命名火箭项目'
+        p['notes'] = ''
         self.filepath = None
         self.result = None
-        self.load_into_form(default_project()); self.show_page('概览')
+        self.load_into_form(p)
+        self.component_tree.selection_set('rocket')
+        self.component_tree.focus('rocket')
+        self.show_page('概览')
+        self.status.set('已新建项目（参数取自默认模板，可在组件树中逐项修改）')
 
     def open_project(self):
         if self.busy:
@@ -813,6 +838,7 @@ class App:
                     return
                 self.filepath = Path(path); self.result = None
                 self.load_into_form(p)
+                self.show_page('概览')
             self._guard(action)
 
     def save(self):
@@ -822,6 +848,7 @@ class App:
             if path:
                 save_project(p, path); self.filepath = Path(path)
                 self.dirty=False
+                self._update_title()
                 self.status.set('项目已保存：'+path)
                 return True
             return False
@@ -881,7 +908,7 @@ class App:
         self.run_button.state(['disabled']); self.cancel_button.state(['!disabled']); self.export_button.state(['disabled'])
         self.cancel_button.pack(side='right', padx=(6, 6), before=self.run_button)
         self.progress.pack(side='right', padx=(6, 3))
-        self.status.set('正在计算发动机、结构、静稳定与飞行回收…'); self.progress.start(12)
+        self.status.set('正在计算发动机、结构、静稳定与飞行回收…'); self.progress.start(40)
         def work():
             try:
                 self.messages.put(('result',run_project(p,self.cancel)))
@@ -932,16 +959,12 @@ class App:
         for canvas in self.canvases:
             canvas.figure.clear()
         self.canvases=[]
+        self.plots_built=set()
         for kind in ['flight','motor','stability']:
-            parent=self.plot_frames[kind]
-            for child in parent.winfo_children():
+            for child in self.plot_frames[kind].winfo_children():
                 child.destroy()
-            fig=make_figure(result,'flight_combined' if kind=='flight' else kind)
-            ui.style_plot(fig)
-            canvas=FigureCanvasTkAgg(fig,master=parent)
-            toolbar=ChineseToolbar(canvas,parent,pack_toolbar=False)
-            toolbar.pack(side='bottom',fill='x'); canvas.get_tk_widget().pack(fill='both',expand=True)
-            canvas.draw(); self.canvases.append(canvas)
+        # Build figures lazily: only the tab being viewed is rendered now.
+        self._build_visible_plot()
         for row in self.event_tree.get_children():
             self.event_tree.delete(row)
         for e in result['flight']['events']:
@@ -953,6 +976,30 @@ class App:
         self.status.set('仿真完成 · '+STATUS_LABELS[flight['status']])
         self.arrange_panes()
         self.draw_schematic()
+
+    def _build_visible_plot(self, event=None):
+        if not self.result:
+            return
+        selected=self.plot_tabs.select()
+        kind=next((k for k,v in self.plot_frames.items() if str(v)==selected),'flight')
+        self._build_plot(kind)
+
+    def _build_plot(self, kind):
+        if kind not in ('flight','motor','stability') or kind in self.plots_built or not self.result:
+            return
+        self.plots_built.add(kind)
+        parent=self.plot_frames[kind]
+        for child in parent.winfo_children():
+            child.destroy()
+        fig=make_figure(self.result,'flight_combined' if kind=='flight' else kind)
+        ui.style_plot(fig)
+        canvas=FigureCanvasTkAgg(fig,master=parent)
+        toolbar=ChineseToolbar(canvas,parent,pack_toolbar=False)
+        toolbar.pack(side='bottom',fill='x'); canvas.get_tk_widget().pack(fill='both',expand=True)
+        canvas.draw_idle(); self.canvases.append(canvas)
+        if hasattr(self,'fit_job'):
+            self.root.after_cancel(self.fit_job)
+        self.fit_job=self.root.after(120,self.fit_plots)
 
     def popout_plot(self):
         if not self.result:
